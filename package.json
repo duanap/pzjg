@@ -1,0 +1,23 @@
+{
+  "name": "pzjg",
+  "version": "1.0.0",
+  "description": "骗子酒馆网页版 —— 撒谎，或者扣下扳机（普通牌局 + 恶魔牌局）",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/engine.test.js",
+    "sim": "node test/sim.js",
+    "e2e": "node test/e2e.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  },
+  "license": "MIT"
+}
