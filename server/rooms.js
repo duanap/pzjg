@@ -12,8 +12,12 @@ const ROOM_CAP = 4;
 const TURN_MS = 30 * 1000; // 人类回合限时
 const BOT_DELAY = [1200, 3000]; // 机器人思考区间 ms
 const CHALLENGE_REVEAL_MS = 1800; // 验牌动画
-const PER_PULL_MS = 1300; // 每发扳机动画
-const AFTER_PUNISH_MS = 1600; // 惩罚后余韵
+const PER_PULL_MS = 1310; // 1150ms 等待 + 160ms 扣扳机
+const VERDICT_MS = 1400;
+const DEVIL_VERDICT_MS = 1700;
+const SURVIVE_MS = 450;
+const PER_PUNISH_MS = 550;
+const AFTER_PUNISH_MS = 700; // 客户端收尾 500ms + 200ms 调度余量
 
 const AVATARS = ['🐭', '🐔', '🦊', '🐻', '🐺', '🐗', '🦉', '🐍', '🦇', '🐸', '🐷', '🐙'];
 const BOT_NAMES = ['醉汉老八', '独眼杰克', '红发安妮', '沉默的鲍勃', '老千阿陈', '赌徒老K', '寡妇玛莎', '扒手小六'];
@@ -89,27 +93,36 @@ class Room {
     return this.seats.findIndex((s) => s && s.socketId === socketId);
   }
 
+  ensureHost() {
+    const host = this.seats[this.hostSeat];
+    if (host && host.socketId && host.connected) return;
+    const next = this.seats.findIndex((s) => s && s.socketId && s.connected);
+    this.hostSeat = next === -1 ? this.seats.findIndex(Boolean) : next;
+  }
+
   compactSeats() {
+    const host = this.seats[this.hostSeat];
     this.seats = this.seats.filter(Boolean);
     while (this.seats.length < ROOM_CAP) this.seats.push(null);
-    if (!this.seats[this.hostSeat]) {
-      const next = this.seats.findIndex(Boolean);
-      this.hostSeat = next === -1 ? 0 : next;
-    }
+    this.hostSeat = host ? this.seats.indexOf(host) : -1;
+    this.ensureHost();
   }
 
   addHuman(socketId, name) {
+    if (this.animating) return -1;
     if (this.game && this.game.phase === 'round') return -1; // 对局中不加人
     const idx = this.firstEmptySeat();
     if (idx === -1) return -1;
     const seat = newSeat({ name, isBot: false });
     seat.socketId = socketId;
     this.seats[idx] = seat;
+    this.ensureHost();
     this.broadcastRoom();
     return idx;
   }
 
   addBot() {
+    if (this.animating) return -1;
     if (this.game && this.game.phase === 'round') return -1;
     const idx = this.firstEmptySeat();
     if (idx === -1) return -1;
@@ -139,6 +152,7 @@ class Room {
   }
 
   kick(seatIdx) {
+    if (this.animating) throw new GameError('正在结算，请稍候');
     if (this.game && this.game.phase === 'round') throw new GameError('对局进行中不能移除座位');
     const s = this.seats[seatIdx];
     if (!s) throw new GameError('该座位是空的');
@@ -148,6 +162,7 @@ class Room {
   }
 
   setMode(mode, bySeat) {
+    if (this.animating) throw new GameError('正在结算，请稍候');
     if (bySeat !== this.hostSeat) throw new GameError('只有房主能切换模式');
     if (this.game && this.game.phase === 'round') throw new GameError('对局进行中不能切换模式');
     if (mode !== 'normal' && mode !== 'devil') throw new GameError('未知模式');
@@ -162,6 +177,7 @@ class Room {
   }
 
   startGame(bySeat) {
+    if (this.animating) throw new GameError('正在结算，请稍候');
     if (bySeat !== this.hostSeat) throw new GameError('只有房主能开始游戏');
     if (this.game && this.game.phase === 'round') throw new GameError('对局已经在进行中');
     if (!this.canStart()) throw new GameError('至少需要 2 名玩家');
@@ -195,6 +211,7 @@ class Room {
   // ---- 动作入口（来自 socket 或机器人） ----
 
   assertPlaying() {
+    if (this.animating) throw new GameError('正在结算，请稍候');
     if (!this.game || this.game.phase !== 'round') throw new GameError('当前不在对局中');
   }
 
@@ -249,7 +266,11 @@ class Room {
     this.animating = true;
     if (io) io.to(this.code).emit('game:challenge', payload);
     const animMs =
-      CHALLENGE_REVEAL_MS + res.punishments.reduce((s, p) => s + p.pulls, 0) * PER_PULL_MS + AFTER_PUNISH_MS;
+      CHALLENGE_REVEAL_MS +
+      (res.devilTriggered ? DEVIL_VERDICT_MS : VERDICT_MS) +
+      res.punishments.reduce((ms, p) =>
+        ms + p.pulls * PER_PULL_MS + PER_PUNISH_MS + (p.died ? 0 : SURVIVE_MS), 0) +
+      AFTER_PUNISH_MS;
     later(this, () => {
       this.animating = false;
       if (res.gameOver) {
@@ -342,10 +363,13 @@ class Room {
     if (idx === -1) return;
     const seat = this.seats[idx];
     seat.connected = false;
-    if (this.game && this.game.phase === 'round') {
-      // 座位交给机器人接管，游戏继续
+    if (this.game && (this.game.phase === 'round' || this.animating)) {
+      // 结算期间保持座次，避免验牌事件中的座位号失效。
       seat.isBot = true;
       seat.socketId = null;
+      this.game.players[idx].isBot = true;
+      this.game.players[idx].connected = false;
+      this.ensureHost();
       this.pushNotice(`${seat.name} 断线，机器人接管了他的手牌…`);
       this.broadcastRoom();
       // 若正好轮到他，重新按机器人节奏调度

@@ -5,7 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/engine.test.js",
+    "test": "node --test test/engine.test.js test/rooms.test.js test/server.test.js",
     "sim": "node test/sim.js",
     "e2e": "node test/e2e.js"
   },

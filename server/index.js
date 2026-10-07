@@ -9,9 +9,25 @@ const app = express();
 const httpServer = require('http').createServer(app);
 const io = new Server(httpServer, { cors: { origin: true } });
 
+app.get('/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ status: 'ok', commit: process.env.RELEASE_COMMIT || null });
+});
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 rooms.init(io);
+
+function parseLobbyPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('请求参数无效');
+  }
+  if ((payload.name !== undefined && typeof payload.name !== 'string') ||
+      (payload.code !== undefined && typeof payload.code !== 'string')) {
+    throw new Error('请求参数无效');
+  }
+  return payload;
+}
 
 io.on('connection', (socket) => {
   let roomCode = null;
@@ -25,8 +41,9 @@ io.on('connection', (socket) => {
     if (room) room.onDisconnect(socket.id);
   };
 
-  socket.on('lobby:create', ({ name } = {}) => {
+  socket.on('lobby:create', (payload = {}) => {
     try {
+      const { name } = parseLobbyPayload(payload);
       leaveCurrentRoom();
       const room = rooms.createRoom(socket.id, name);
       roomCode = room.code;
@@ -37,8 +54,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('lobby:join', ({ code, name } = {}) => {
+  socket.on('lobby:join', (payload = {}) => {
     try {
+      const { code, name } = parseLobbyPayload(payload);
       const room = rooms.getRoom(code);
       if (!room) throw new Error('房间不存在，检查房号是否输对');
       const seatIdx = room.seatOfSocket(socket.id);
@@ -73,7 +91,7 @@ io.on('connection', (socket) => {
   const requireHost = (fn) => {
     return requireRoom((room, payload) => {
       const seat = room.seatOfSocket(socket.id);
-      if (seat !== room.hostSeat) throw new Error('只有房主能执行该操作');
+      if (seat === -1 || seat !== room.hostSeat) throw new Error('只有房主能执行该操作');
       fn(room, seat, payload);
     });
   };
@@ -94,6 +112,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, '0.0.0.0', () => {
+const HOST = process.env.HOST || '0.0.0.0';
+httpServer.listen(PORT, HOST, () => {
   console.log(`🃏 骗子酒馆已开张: http://localhost:${PORT}`);
 });
